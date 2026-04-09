@@ -67,6 +67,12 @@ typedef struct {
     int total_params;
 } VLMWeights;
 
+// ── Simple random helper (stdlib-based) ──────────────────────────────────────
+
+static float vlm_rand_uniform(void) {
+    return (float)rand() / (float)RAND_MAX;
+}
+
 // ── Simple char tokenizer ────────────────────────────────────────────────────
 
 static char vocab[VOCAB_SIZE];
@@ -119,67 +125,55 @@ static VLMWeights init_model(void) {
     nt_tape_start();
 
     // Vision projection
-    w.vis_proj_w = nt_tape_get()->n_params;
     nt_tensor* vw = nt_tensor_new2d(D_MODEL, IMAGE_DIM);
     nt_tensor_xavier(vw, IMAGE_DIM, D_MODEL);
-    nt_tape_get()->params[nt_tape_get()->n_params] = vw;
-    nt_tape_get()->n_params++;
+    w.vis_proj_w = nt_tape_param(vw);
     total += vw->len;
 
-    w.vis_proj_b = nt_tape_get()->n_params;
     nt_tensor* vb = nt_tensor_new(D_MODEL);
     nt_tensor_fill(vb, 0.0f);
-    nt_tape_get()->params[nt_tape_get()->n_params] = vb;
-    nt_tape_get()->n_params++;
+    w.vis_proj_b = nt_tape_param(vb);
     total += vb->len;
 
-    w.vis_pos = nt_tape_get()->n_params;
     nt_tensor* vp = nt_tensor_new(N_PATCHES * D_MODEL);
     nt_tensor_rand(vp, 0.02f);
-    nt_tape_get()->params[nt_tape_get()->n_params] = vp;
-    nt_tape_get()->n_params++;
+    w.vis_pos = nt_tape_param(vp);
     nt_tape_no_decay(w.vis_pos);
     total += vp->len;
 
     // Text embeddings
-    w.wte = nt_tape_get()->n_params;
     nt_tensor* wte = nt_tensor_new2d(VOCAB_SIZE, D_MODEL);
     nt_tensor_rand(wte, 0.02f);
-    nt_tape_get()->params[nt_tape_get()->n_params] = wte;
-    nt_tape_get()->n_params++;
+    w.wte = nt_tape_param(wte);
     nt_tape_no_decay(w.wte);
     total += wte->len;
 
-    w.wpe = nt_tape_get()->n_params;
     nt_tensor* wpe = nt_tensor_new2d(MAX_SEQ, D_MODEL);
     nt_tensor_rand(wpe, 0.02f);
-    nt_tape_get()->params[nt_tape_get()->n_params] = wpe;
-    nt_tape_get()->n_params++;
+    w.wpe = nt_tape_param(wpe);
     nt_tape_no_decay(w.wpe);
     total += wpe->len;
 
     // Transformer layers
     for (int l = 0; l < N_LAYERS; l++) {
-        // Self-attention
+        // Helper: allocate a weight matrix and register as param
         #define ALLOC_MAT(field, rows, cols) do { \
-            w.layers[l].field = nt_tape_get()->n_params; \
             nt_tensor* _t = nt_tensor_new2d(rows, cols); \
             nt_tensor_xavier(_t, cols, rows); \
-            nt_tape_get()->params[nt_tape_get()->n_params] = _t; \
-            nt_tape_get()->n_params++; \
+            w.layers[l].field = nt_tape_param(_t); \
             total += _t->len; \
         } while(0)
 
+        // Helper: allocate a bias/norm vector and register as no-decay param
         #define ALLOC_VEC(field, size, val) do { \
-            w.layers[l].field = nt_tape_get()->n_params; \
             nt_tensor* _t = nt_tensor_new(size); \
             nt_tensor_fill(_t, val); \
-            nt_tape_get()->params[nt_tape_get()->n_params] = _t; \
-            nt_tape_get()->n_params++; \
+            w.layers[l].field = nt_tape_param(_t); \
             nt_tape_no_decay(w.layers[l].field); \
             total += _t->len; \
         } while(0)
 
+        // Self-attention
         ALLOC_MAT(wq, D_MODEL, D_MODEL);
         ALLOC_MAT(wk, D_MODEL, D_MODEL);
         ALLOC_MAT(wv, D_MODEL, D_MODEL);
@@ -206,19 +200,15 @@ static VLMWeights init_model(void) {
     }
 
     // Final layer norm
-    w.ln_final_g = nt_tape_get()->n_params;
     nt_tensor* lng = nt_tensor_new(D_MODEL);
     nt_tensor_fill(lng, 1.0f);
-    nt_tape_get()->params[nt_tape_get()->n_params] = lng;
-    nt_tape_get()->n_params++;
+    w.ln_final_g = nt_tape_param(lng);
     nt_tape_no_decay(w.ln_final_g);
     total += lng->len;
 
-    w.ln_final_b = nt_tape_get()->n_params;
     nt_tensor* lnb = nt_tensor_new(D_MODEL);
     nt_tensor_fill(lnb, 0.0f);
-    nt_tape_get()->params[nt_tape_get()->n_params] = lnb;
-    nt_tape_get()->n_params++;
+    w.ln_final_b = nt_tape_param(lnb);
     nt_tape_no_decay(w.ln_final_b);
     total += lnb->len;
 
@@ -351,7 +341,7 @@ static int forward_pass(VLMWeights* w, int* tokens, int T,
     }
 
     // Final layer norm
-    x = nt_seq_layernorm(x, w.ln_final_g, w.ln_final_b, T, D_MODEL);
+    x = nt_seq_layernorm(x, w->ln_final_g, w->ln_final_b, T, D_MODEL);
 
     // Output projection (weight-tied with wte)
     int logits = nt_seq_linear(w->wte, x, T);
@@ -362,24 +352,23 @@ static int forward_pass(VLMWeights* w, int* tokens, int T,
 // ── Save weights ─────────────────────────────────────────────────────────────
 
 static void save_weights(const char* path) {
-    FILE* f = fopen(path, "wb");
-    if (!f) { printf("  Failed to save: %s\n", path); return; }
-
+    // Collect all param tensors from the tape
     nt_tape* tape = nt_tape_get();
-    int magic = 0x4E545643;  // "NTVC" — notorch VLM checkpoint
-    int version = 1;
-    fwrite(&magic, sizeof(int), 1, f);
-    fwrite(&version, sizeof(int), 1, f);
-    fwrite(&tape->n_params, sizeof(int), 1, f);
+    int np = tape->n_params;
+    nt_tensor** params = (nt_tensor**)malloc(np * sizeof(nt_tensor*));
+    if (!params) { printf("  Failed to allocate param array\n"); return; }
 
-    for (int i = 0; i < tape->n_params; i++) {
-        nt_tensor* t = tape->params[i];
-        fwrite(&t->len, sizeof(int), 1, f);
-        fwrite(t->data, sizeof(float), t->len, f);
+    for (int i = 0; i < np; i++) {
+        params[i] = tape->entries[i].output;
     }
 
-    fclose(f);
-    printf("  Weights saved to %s\n", path);
+    int ret = nt_save(path, params, np);
+    if (ret == 0) {
+        printf("  Weights saved to %s (%d params)\n", path, np);
+    } else {
+        printf("  Failed to save: %s\n", path);
+    }
+    free(params);
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -438,7 +427,7 @@ int main(void) {
         // Random sequence window
         int max_start = text_len - MAX_SEQ - 1;
         if (max_start < 0) max_start = 0;
-        int start = (int)(rand_uniform() * max_start);
+        int start = (int)(vlm_rand_uniform() * max_start);
         int T = MAX_SEQ;
         if (start + T + 1 > text_len) T = text_len - start - 1;
         if (T < 2) continue;
