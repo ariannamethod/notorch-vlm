@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.so
+*.o
+*.a
+train_vlm
+chuck.mem
+.venv/
+venv/
