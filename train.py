@@ -183,7 +183,7 @@ class MiniVLM(nn.Module):
 
 
 def create_training_image():
-    """Create a 64x64 synthetic image with red square in center"""
+    """Create a 32x32 synthetic image with red square in center"""
     img = torch.rand(3, IMAGE_SIZE, IMAGE_SIZE) * 0.3
     c = IMAGE_SIZE // 2
     s = IMAGE_SIZE // 6
@@ -217,9 +217,7 @@ def main():
 
     model = MiniVLM(vocab_size=tokenizer.vocab_size)
     total_params = sum(p.numel() for p in model.parameters())
-    # Weight-tied params counted once
-    unique_params = total_params - model.head.weight.numel()  # head shares with token_emb
-    print(f"  Model parameters: {total_params:,} (unique: {total_params:,})")
+    print(f"  Model parameters: {total_params:,}")
 
     # Chuck optimizer
     try:
