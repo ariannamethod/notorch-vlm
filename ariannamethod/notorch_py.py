@@ -26,7 +26,8 @@ _lib_path = os.path.join(_dir, 'libnotorch.so')
 if not os.path.exists(_lib_path):
     raise RuntimeError(
         f"libnotorch.so not found at {_lib_path}. "
-        f"Build it: cc -std=c11 -O2 -fPIC -shared -o libnotorch.so notorch.c -lm"
+        f"Build it from the ariannamethod/ directory: "
+        f"cc -std=c11 -O2 -fPIC -shared -o libnotorch.so notorch.c -lm"
     )
 
 _lib = ctypes.CDLL(_lib_path)
