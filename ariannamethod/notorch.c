@@ -1496,6 +1496,30 @@ void nt_tape_apply_accum(int n_accum) {
     }
 }
 
+float nt_tape_entry_scalar(int idx) {
+    if (idx < 0 || idx >= g_tape.count) return 0.0f;
+    nt_tape_entry* e = &g_tape.entries[idx];
+    if (!e->output || e->output->len < 1) return 0.0f;
+    return e->output->data[0];
+}
+
+void nt_tape_reset_graph(void) {
+    // Free grads and non-param output tensors, reset count to n_params
+    for (int i = 0; i < g_tape.count; i++) {
+        nt_tape_entry* e = &g_tape.entries[i];
+        if (e->grad) {
+            nt_tensor_free(e->grad);
+            e->grad = NULL;
+        }
+        // Free non-param output tensors to avoid leaks
+        if (!e->is_param && e->output) {
+            nt_tensor_free(e->output);
+            e->output = NULL;
+        }
+    }
+    g_tape.count = g_tape.n_params;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TRAINING MODE
 // ═══════════════════════════════════════════════════════════════════════════════

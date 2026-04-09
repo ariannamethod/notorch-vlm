@@ -215,6 +215,12 @@ float nt_tape_clip_grads(float max_norm);
 void  nt_tape_accum_grads(void);
 void  nt_tape_apply_accum(int n_accum);
 
+// Helper: read the scalar value from a tape entry's output tensor
+float nt_tape_entry_scalar(int idx);
+
+// Helper: reset the computation graph (keep params, clear everything else)
+void  nt_tape_reset_graph(void);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // LR SCHEDULE — warmup + cosine annealing + step decay
 // ═══════════════════════════════════════════════════════════════════════════════
