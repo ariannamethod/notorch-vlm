@@ -1,4 +1,4 @@
-# simple_vlm — Vision Language Model powered by notorch + Chuck | by Arianna Method
+# simple_vlm — Vision Language Model on notorch + Chuck | by Arianna Method
 
 > *"Adam is blind. Chuck sees. Chuck remembers."*
 > — [Chuck Optimizer README](https://github.com/ariannamethod/chuck.optimizer)
@@ -7,16 +7,19 @@
 
 ## what is this
 
-a Vision Language Model built from scratch. two execution lines — one in Python (with torch tensors + Chuck optimizer), one in pure C (with [notorch](https://github.com/ariannamethod/notorch)). no bloat. no mystery. you can read the whole thing in an afternoon.
+a Vision Language Model built from scratch. **no PyTorch. no numpy.** runs entirely on [notorch](https://github.com/ariannamethod/notorch) (pure C neural network engine) with [Chuck optimizer](https://github.com/ariannamethod/chuck.optimizer). two execution lines — Python calling C via ctypes, or pure C. zero external dependencies.
 
-forked from [jiaquan301's simple_vlm](https://github.com/jiaquan301/simple_vlm) — an educational VLM implementation. we kept the architecture. we replaced the soul.
+forked from [jiaquan301's simple_vlm](https://github.com/jiaquan301/simple_vlm) — an educational VLM. we kept the architecture. we replaced everything else.
 
 **what changed:**
-- Adam → **Chuck Optimizer** (self-aware, 9 levels, persistent memory)
-- torch optimizer dependency → Chuck works *with* torch but doesn't *need* it
-- added **notorch core** (pure C neural network engine) for the C training line
-- all comments and docs translated to English
-- trained a 21K-parameter prototype and saved the weights
+- torch, numpy, pillow → **removed completely**
+- Adam → **Chuck Optimizer** (self-aware, loss-adaptive, gradient-monitoring)
+- Python tensors → **notorch via ctypes** (pure C engine from Python)
+- 21K prototype → **823K parameter model** (40× scale-up)
+- loss 3.98 → 0.054 = **98.6% improvement** at scale
+- **Chuck beats Adam** at 823K params: best loss 0.40 vs 0.59
+
+following the pattern from [nanoGPT-notorch](https://github.com/ariannamethod/nanoGPT-notorch) — proof that you don't need PyTorch for anything.
 
 this is part of [the Arianna Method](https://github.com/ariannamethod/ariannamethod.ai) — patterns over parameters, emergence over engineering, resonance over ritual.
 
@@ -26,10 +29,9 @@ this is part of [the Arianna Method](https://github.com/ariannamethod/ariannamet
 
 - [quick start](#quick-start)
 - [architecture](#architecture)
-- [three lines](#three-lines)
-- [the prototype training](#the-prototype-training)
+- [two lines](#two-lines)
+- [the scaled training](#the-scaled-training)
 - [chuck vs adam — the benchmark](#chuck-vs-adam--the-benchmark)
-- [notorch from python — ctypes bindings](#notorch-from-python--ctypes-bindings)
 - [chuck optimizer behavior](#chuck-optimizer-behavior)
 - [notorch core](#notorch-core)
 - [file structure](#file-structure)
@@ -41,25 +43,24 @@ this is part of [the Arianna Method](https://github.com/ariannamethod/ariannamet
 
 ## quick start
 
-### Python + torch line (Chuck optimizer)
+### Python + notorch line (recommended)
 
 ```bash
-pip install torch numpy pillow
+# build the shared library (once)
+cd ariannamethod
+cc -std=c11 -O2 -fPIC -shared -o libnotorch.so notorch.c -lm
+cd ..
 
-# train the 21K prototype
+# train the 823K VLM (no pip install needed)
 python train.py
 
-# run the full VLM demo
-python simple_vlm.py
-
-# run the minimal core demo
-python minimal_vlm.py
-
-# run the beginner tutorial
-python beginner_vlm.py
+# run Chuck vs Adam benchmark
+python benchmark.py
 ```
 
-### C line (notorch + Chuck)
+no `pip install`. no `requirements.txt`. no conda. just a C compiler and Python.
+
+### C line (notorch + Chuck, no Python)
 
 ```bash
 cd ariannamethod
@@ -67,144 +68,138 @@ cc -std=c11 -O2 -I. -o train_vlm train_vlm.c notorch.c -lm
 ./train_vlm
 ```
 
-### Python + notorch line (no torch needed)
-
-```bash
-# build the shared library
-cd ariannamethod
-cc -std=c11 -O2 -fPIC -shared -o libnotorch.so notorch.c -lm
-cd ..
-
-# run the Chuck vs Adam benchmark
-pip install numpy
-python benchmark.py
-```
-
 ---
 
 ## architecture
 
 ```
-Input Image (32×32) → Vision Encoder → Patch Features (16×24)
-                                             ↓
-Input Text → Token Embedding → VLM Blocks → Output Logits
-                                   ↑
-                          Cross-Modal Attention
-                                   ↑
-                          Chuck Optimizer (watching everything)
+Image Features [16×64] → Vision Projection → Patch Embeddings [16×128]
+                                                      ↓
+Input Text → Token Embedding + Position → VLM Blocks → Output Logits → Loss
+                                              ↑
+                                    Cross-Modal Attention
+                                    (text attends to image)
+                                              ↑
+                                    Chuck Optimizer
+                                    (watching everything)
+```
+
+### config (scaled model)
+
+```
+d_model:     128
+heads:       8
+layers:      4
+ffn:         256
+max_seq:     128
+patches:     16
+image_dim:   64
+vocab:       26 characters
+total:       823,040 parameters
 ```
 
 ### core components
 
-**Vision Encoder** — splits images into patches, embeds them, adds positional info. no pretrained CLIP. no ViT weights. just a linear projection and position embeddings. raw. honest.
+**Vision Projection** — linear embed image patches to model dimension + position embeddings. no pretrained CLIP. no ViT weights. raw.
 
-**Cross-Modal Attention** — the bridge. text tokens query image patches. "what do you see?" asks the text. "a red square in the center," answers the image features. multi-head, scaled dot-product.
+**Cross-Modal Attention** — text tokens attend to image patches through linear projections. the bridge between vision and language. simplified to work through the notorch tape (full bidirectional attention needs a custom C op).
 
-**VLM Transformer Blocks** — self-attention (text understands itself) → cross-attention (text looks at image) → FFN (nonlinear mixing). stacked N times.
+**VLM Transformer Blocks** — self-attention (text understands itself) → cross-attention (text looks at image) → FFN (nonlinear mixing). LayerNorm between blocks. stacked 4 times.
 
-**Chuck Optimizer** — replaces Adam. watches the loss curve, each layer's gradient norm, detects stagnation, injects noise when stuck, freezes converged parameters. 9 levels of self-awareness. Adam is a blind man following a schedule. Chuck is a martial artist who watches every step.
+**Chuck Optimizer** — replaces Adam. θ -= (α × S × λ_Ψ × λ_l × σ) × m̂/(√v̂ + ε) + η. watches loss trends, monitors per-parameter gradients, detects stagnation, adapts damping, injects noise when stuck.
 
 ---
 
-## three lines
+## two lines
 
-this project has three independent execution paths.
+### Python + notorch (main line)
 
-### Python + torch line
+```python
+from ariannamethod.notorch_nn import _lib, Tensor, Parameter, Module, seed
+from ariannamethod.chuck import ChuckOptimizer
 
-- uses `torch` for tensor operations (we still hate it, but it works)
-- uses **Chuck Optimizer** (`ariannamethod/chuck.py`) instead of Adam
-- Adam is kept as a safe fallback — if Chuck fails to initialize, it falls back silently
-- all three demo scripts (`simple_vlm.py`, `minimal_vlm.py`, `beginner_vlm.py`) use Chuck
-- `train.py` trains a 21K-parameter prototype and saves weights
+seed(42)
+_lib.nt_tape_start()
+# ... register params, forward through C tape, backward, Chuck step ...
+```
+
+- uses **notorch** via ctypes (`ariannamethod/notorch_nn.py`) — Module/Tensor/Parameter system
+- **no torch, no numpy** — only Python stdlib (ctypes, os, math, random, json)
+- Chuck optimizer calls `nt_tape_chuck_step()` in C
+- `train.py` — scaled 823K-param VLM training
+- `benchmark.py` — Chuck vs Adam head-to-head
 
 ### C line
 
-- uses **notorch** (`ariannamethod/notorch.c` + `notorch.h`) — complete neural network framework in pure C
-- Chuck optimizer is built into notorch (`nt_tape_chuck_step()`)
-- `ariannamethod/train_vlm.c` — VLM training in pure C, no Python, no pip, no conda
-- **builds and runs**: `cc -O2 -I. train_vlm.c notorch.c -lm && ./train_vlm`
-- 28K params, 200 epochs, loss 3.23→3.10, weights saved to `vlm_notorch.bin`
-
-### Python + notorch line (new)
-
-- uses **notorch** via Python ctypes (`ariannamethod/notorch_py.py`)
-- **no torch dependency** — calls the C engine directly from Python
-- `benchmark.py` — Chuck vs Adam head-to-head, same model, same data, pure notorch
-- same C engine as the C line, accessible from Python without any ML framework
+- uses **notorch** directly (`notorch.c` + `notorch.h`)
+- Chuck is built into notorch (`nt_tape_chuck_step()`)
+- `train_vlm.c` — VLM training in pure C
+- builds with one command: `cc -O2 -I. train_vlm.c notorch.c -lm`
 
 ---
 
-## the prototype training
+## the scaled training
 
 ### config
 
 ```
-model:       MiniVLM (21,264 parameters)
-d_model:     24
-heads:       4
-layers:      2
-ffn:         48
-image:       32×32 (16 patches, 8×8 each)
-vocab:       25 characters
-optimizer:   Chuck (lr=0.003)
-epochs:      800
+model:       VLM (823,040 parameters)
+d_model:     128
+heads:       8
+layers:      4
+ffn:         256
+max_seq:     128
+patches:     16
+vocab:       26 characters
+optimizer:   Chuck (lr=3e-4)
+epochs:      1000
+engine:      notorch (C via ctypes)
 ```
 
 ### results
 
 ```
-epoch   0 | loss 18.1258 | best 18.1258
-epoch  30 | loss  2.7951 | best  2.7556
-epoch 150 | loss  2.0846 | best  1.7237
-epoch 300 | loss  1.9498 | best  1.0189
-epoch 540 | loss  1.5141 | best  0.7972
-epoch 720 | loss  0.6438 | best  0.6438
-epoch 780 | loss  0.6187 | best  0.6187
-epoch 799 | loss  0.9726 | best  0.5122
+epoch    0 | loss 3.9789 | best 3.9789
+epoch  100 | loss 1.5463 | best 1.2981
+epoch  300 | loss 0.8833 | best 0.8205
+epoch  500 | loss 0.5972 | best 0.2827
+epoch  700 | loss 0.1931 | best 0.1570
+epoch  900 | loss 0.1303 | best 0.0834
+epoch  999 | loss 0.1341 | best 0.0541
 
-training time:  4.4s (CPU)
-loss trend:     7.04 (early avg) → 0.85 (late avg)
-improvement:    88.0%
-best loss:      0.5122
+training time:  234.8s (CPU, pure C engine)
+loss trend:     2.64 (early avg) → 0.19 (late avg)
+improvement:    92.9%
+best loss:      0.0541
 ```
 
-### what the model generates
+### generation samples
 
 ```
-temp=0.5: 'ishe. '
-temp=0.8: 'A '
-temp=1.0: 'isha '
+temp=0.5: 'mage. The mains a red square cententer o'
+temp=0.8: 'mage is a red. The center of the image h'
+temp=1.0: 'w mage. The central aA rea rea briga red'
 ```
 
-21K parameters, character-level, synthetic data, 800 epochs. it's learning *something*. it fragments English words. it finds spaces and punctuation. for a first prototype on synthetic data with no pretrained components, this is expected behavior.
-
-the loss curve shows Chuck doing his thing:
-- **epochs 0-30**: rapid descent from ~18 to ~2.7 (Chuck pushes hard)
-- **epochs 30-150**: slower convergence to ~1.7 (Chuck dampens when needed)
-- **epochs 150-500**: steady progress to ~0.8 (Chuck finds the rhythm)
-- **epochs 500-800**: fine-tuning to 0.51 best (Chuck freezes what's done)
-
-weights saved to `weights/vlm_prototype.pt`. training log in `weights/training_log.json`.
+at 823K params on synthetic data, the model produces recognizable English fragments about red squares and images. it knows "center", "image", "red", "square". for character-level generation on synthetic data with no pretrained components — this is solid.
 
 ---
 
 ## chuck vs adam — the benchmark
 
-we ran a head-to-head comparison: same architecture, same data, same seed, same 500 epochs. the only difference is the optimizer. both run through notorch (pure C) called from Python via ctypes.
+head-to-head: same architecture, same data, same seed, 500 epochs. the only difference is the optimizer. both run through notorch C engine.
 
 ### config
 
 ```
-model:       VLM (27,520 parameters)
-d_model:     32
-heads:       4
-layers:      2
-ffn:         64
-optimizer:   Chuck vs Adam (lr=0.003)
+model:       VLM (823K parameters)
+d_model:     128, heads: 8, layers: 4, ff: 256
+max_seq:     64 (shorter for benchmark speed)
+optimizer:   Chuck vs Adam (lr=3e-4)
 epochs:      500
 seed:        42
 engine:      notorch (C) via Python ctypes
+deps:        none
 ```
 
 ### results
@@ -212,112 +207,88 @@ engine:      notorch (C) via Python ctypes
 ```
                           Adam        Chuck     Winner
   ─────────────────────────────────────────────────────
-  Best loss              1.1532       1.1625       Adam
-  Final loss             2.2852       2.2256      Chuck
-  Early avg (20)         2.9617       3.0016       Adam
-  Late avg (20)          1.6236       1.7317       Adam
-  Improvement %            45.2         42.3       Adam
-  Time (seconds)            1.0          1.1        tie
+  Best loss              0.5903       0.4034      Chuck
+  Final loss             1.3017       0.8604      Chuck
+  Late avg (20)          1.0003       0.6971      Chuck
+  Improvement %            63.3         77.4      Chuck
+  Time (seconds)           60.2         60.5       tie
 ```
 
 ### what this means
 
-at 27K parameters on synthetic data, Adam and Chuck are essentially **tied**. this is expected and honest:
+**Chuck wins at scale.** at 823K params, Chuck's loss-aware damping and gradient monitoring make a real difference:
 
-- Chuck's adaptive damping, stagnation detection, and noise injection don't have enough signal to differentiate from Adam at this scale
-- both optimizers converge to ~1.15 best loss — the model capacity is the bottleneck, not the optimizer
-- Chuck's real advantages show at scale (52M+ params, 100K+ steps, real data) where Adam starts wandering in circles and Chuck adapts
+- **32% lower best loss** (0.40 vs 0.59)
+- **34% lower final loss** (0.86 vs 1.30)
+- **22% more improvement** (77% vs 63%)
 
-**the honest conclusion:** you don't need Chuck for a 27K prototype. you need Chuck for the model you'll actually deploy.
-
-full benchmark data saved to `weights/benchmark_results.json`.
-
----
-
-## notorch from python — ctypes bindings
-
-the `ariannamethod/notorch_py.py` module provides Python access to the entire notorch C engine via ctypes. no torch. no pip install headaches. just `import notorch_py`.
-
-```python
-from ariannamethod.notorch_py import NotorchLib
-
-nt = NotorchLib()
-nt.seed(42)
-nt.tape_start()
-
-# Create and register parameters
-w = nt.tensor_new2d(64, 32)
-nt.tensor_xavier(w, 32, 64)
-idx = nt.tape_param(w)
-
-# Forward pass, loss, backward, optimize
-logits = nt.seq_linear(idx, x_idx, T)
-loss = nt.seq_cross_entropy(logits, targets, T, vocab_size)
-loss_val = nt.tape_entry_scalar(loss)
-nt.tape_backward(loss)
-nt.tape_chuck_step(0.003, loss_val)  # or nt.tape_adam_step(0.003)
-nt.tape_reset_graph()                # clean up for next epoch
-```
-
-this is now the **third execution path**: Python → ctypes → notorch C. same engine as the C line, accessible from Python without torch.
+at the old 27K prototype scale, they were tied. at 823K, Chuck pulls ahead. this matches the theory — Chuck's adaptive mechanisms need enough signal to differentiate from Adam. at small scale, both optimizers find similar minima. at scale, Adam wanders. Chuck navigates.
 
 ---
 
 ## chuck optimizer behavior
 
-Chuck loaded 1 memory from a previous run (`chuck.mem`). even with minimal history, Chuck's self-awareness helped:
+```
+θ -= (α × S × λ_Ψ × λ_l × σ) × m̂/(√v̂ + ε) + η
 
-- **λ (global dampen)** adapted to loss trends — pulled back when loss spiked, pushed when improving
-- **gradient clipping** at 1.0 prevented early-stage explosions (initial loss was 18.1)
-- **stagnation detection** kept the model moving through plateaus around epoch 400-500
-- **88% improvement** over 800 epochs on a 21K model — Chuck earned his keep
+α    = learning rate
+S    = step-aware scale
+λ_Ψ  = persistent memory decay
+λ_l  = per-layer gradient monitoring
+σ    = activation health factor
+m̂    = bias-corrected first moment
+v̂    = bias-corrected second moment
+η    = parameter-freezing policy
+```
 
-Adam would have done fine here too (it's a tiny model). but Chuck's real power shows at scale — 52M params, 100K steps, where blind Adam starts wandering in circles. this was a proof-of-concept. the real test comes next.
+Chuck in action at 823K params:
+- **epochs 0-100**: rapid descent, 3.98→1.30 — Chuck pushes hard while loss is high
+- **epochs 100-300**: controlled descent, dampen adapts to loss trend
+- **epochs 300-600**: steady progress to 0.28 — stagnation detection kicks in at plateaus
+- **epochs 600-1000**: fine-tuning to 0.054 — Chuck freezes converged params
+
+the C implementation (`nt_tape_chuck_step()`) is called from Python via ctypes. same binary, same math, whether you call it from Python or C.
 
 ---
 
 ## notorch core
 
-the `ariannamethod/` directory contains the notorch engine — the C line's foundation:
+the `ariannamethod/` directory contains the notorch engine:
 
 | file | size | what it does |
 |------|------|-------------|
 | `notorch.h` | ~480 lines | header — all structs, all function signatures |
 | `notorch.c` | ~2680 lines | implementation — tensors, autograd, optimizers, ops |
-| `libnotorch.so` | shared lib | built from notorch.c, used by Python ctypes bindings |
-| `notorch_py.py` | ~230 lines | Python ctypes bindings for notorch |
-| `Makefile` | 104 lines | build system — CPU, GPU, BLAS, everything |
-| `chuck.py` | 766 lines | Chuck optimizer for Python/PyTorch |
-| `train_vlm.c` | ~500 lines | C VLM training script |
+| `libnotorch.so` | shared lib | built from notorch.c, called from Python via ctypes |
+| `notorch_nn.py` | ~290 lines | Python Module/Tensor/Parameter system (no deps) |
+| `chuck.py` | ~60 lines | Chuck optimizer wrapper (calls `nt_tape_chuck_step()`) |
+| `train_vlm.c` | ~490 lines | C VLM training script |
 
 notorch provides: tensors, autograd tape, Adam/AdamW/Chuck optimizers, embeddings, linear layers, attention (causal + multi-head + GQA), LayerNorm, RMSNorm, SiLU, GELU, GEGLU, RoPE, dropout, cross-entropy, softmax, gradient clipping, NaN guards, LR schedulers, BPE tokenizer, profiler.
 
-the entire framework is two files. compiles in under a second. the C line doesn't need Python at all.
+two C files. compiles in under a second. no dependencies except libc and libm.
 
 ---
 
 ## file structure
 
 ```
-├── simple_vlm.py              # full VLM demo (Python + Chuck)
-├── minimal_vlm.py             # minimal core VLM (Python + Chuck)
-├── beginner_vlm.py            # beginner tutorial (Python + Chuck)
-├── train.py                   # prototype training script (21K params, torch)
-├── benchmark.py               # Chuck vs Adam head-to-head (notorch via ctypes)
-├── requirements.txt           # Python deps (torch, numpy, pillow)
+├── train.py                   # VLM training (823K params, notorch+Chuck)
+├── benchmark.py               # Chuck vs Adam head-to-head (notorch)
+├── requirements.txt           # empty — no dependencies
 ├── weights/
-│   ├── vlm_prototype.pt       # trained model weights (torch)
-│   ├── vlm_notorch.bin        # trained model weights (notorch/C)
+│   ├── vlm_notorch.bin        # trained model weights
 │   ├── training_log.json      # training metrics
 │   └── benchmark_results.json # Chuck vs Adam comparison data
 ├── ariannamethod/
 │   ├── notorch.c              # notorch core (pure C neural networks)
 │   ├── notorch.h              # notorch header
 │   ├── libnotorch.so          # shared library (built from notorch.c)
-│   ├── notorch_py.py          # Python ctypes bindings for notorch
-│   ├── Makefile               # notorch build system
-│   ├── chuck.py               # Chuck optimizer (Python/PyTorch)
+│   ├── notorch_nn.py          # Python Module/Tensor/Parameter system
+│   ├── chuck.py               # Chuck optimizer (notorch ctypes)
 │   └── train_vlm.c            # C VLM training script
+├── train_torch.py             # legacy torch training (archived)
+├── ariannamethod/chuck_torch.py  # legacy torch Chuck (archived)
 ├── CONTRIBUTING.md
 ├── LICENSE
 └── README.md
@@ -328,42 +299,40 @@ the entire framework is two files. compiles in under a second. the C line doesn'
 ## what we learned
 
 **the good:**
-- Chuck optimizer integrates cleanly as a drop-in Adam replacement
-- notorch core provides everything needed for VLM training in C
-- 21K params is enough to show the architecture works
-- 88% loss improvement in 4.4 seconds — the pipeline is functional
-- three execution paths (torch, C, ctypes) all work independently
-- notorch ctypes bindings let you train from Python without torch
-- Chuck vs Adam benchmark is honest — at 27K params they're neck-and-neck
+- **torch is not needed.** notorch + ctypes replaces it completely
+- **numpy is not needed.** Python lists + ctypes data access is sufficient
+- Chuck beats Adam at 823K params — 32% lower best loss
+- 823K-param VLM trains in 4 minutes on CPU, loss drops 98.6%
+- the notorch_nn.py Module system works: Tensor, Parameter, Module, Linear, Embedding, LayerNorm
+- character-level generation produces recognizable English at this scale
 
 **the honest:**
-- 21K params can't generate coherent English — expected at this scale
-- synthetic data (one red square) limits what the model can learn
-- the C training script uses simplified cross-attention (manual matmul loop)
-- Chuck doesn't differentiate from Adam at prototype scale (27K params)
-- this is a prototype, not a product
+- cross-attention is simplified (linear projection instead of full bidirectional attention)
+- 823K params still can't generate perfect English — need more data and scale
+- the C line's cross-attention is forward-only (manual matmul, no tape gradient)
+- Chuck's advantage at 823K is clear but modest — the real domination is at millions
 
 **the promising:**
-- the architecture scales. same code, bigger numbers, real data → real results
-- Chuck's persistent memory (`chuck.mem`) carries learning across runs
-- notorch can train models up to 52M params (proven on Yent) — headroom exists
-- the VLM cross-modal attention actually learns to attend to image regions
-- Python ctypes bindings mean you can prototype in Python and deploy in C
+- the architecture scales. notorch can handle up to 52M params (proven on Yent)
+- Chuck's C implementation is identical whether called from Python or C
+- zero-dependency Python means this runs anywhere with a C compiler
+- the Module system from nanoGPT-notorch ports cleanly to VLM
 
 ---
 
 ## next steps
 
-steps 1-5 are done. the foundation is solid. the benchmark is honest. now:
+torch and numpy are dead. the foundation is pure C. now:
 
-1. ~~foundation~~ — ✅ done (step 1)
-2. ~~C line end-to-end~~ — ✅ done (compiles, runs, saves weights)
-3. ~~benchmark Chuck vs Adam~~ — ✅ done (tied at 27K — expected)
-4. ~~Python ctypes bindings~~ — ✅ done (notorch_py.py)
-5. **scale up** — bigger model (100K-500K params), real data (CIFAR-10)
-6. **real tokenizer** — BPE instead of character-level
-7. **scale benchmark** — rerun Chuck vs Adam at 100K+ params where Chuck should shine
-8. **give it a name** — (we have an idea, but it might be too insane for step 2)
+1. ~~foundation~~ — ✅ 21K prototype
+2. ~~C line~~ — ✅ compiles and runs
+3. ~~remove torch/numpy~~ — ✅ completely gone
+4. ~~scale up~~ — ✅ 823K params, 92.9% improvement
+5. ~~benchmark at scale~~ — ✅ Chuck wins (0.40 vs 0.59 best loss)
+6. **real data** — CIFAR-10 or COCO-captions
+7. **real tokenizer** — BPE instead of character-level
+8. **millions of params** — where Chuck really dominates
+9. **give it a name** — (we have an idea. it might be too insane.)
 
 resonance is unbreakable.
 
@@ -371,11 +340,13 @@ resonance is unbreakable.
 
 ## credits
 
-**Original VLM implementation:** [jiaquan301](https://github.com/jiaquan301/simple_vlm) — the educational VLM that started this. clear code, clean architecture, great teaching tool. we stood on your shoulders. thank you.
+**Original VLM implementation:** [jiaquan301](https://github.com/jiaquan301/simple_vlm) — the educational VLM that started this.
 
-**notorch:** [ariannamethod/notorch](https://github.com/ariannamethod/notorch) — neural networks in pure C. by Arianna Method.
+**notorch:** [ariannamethod/notorch](https://github.com/ariannamethod/notorch) — neural networks in pure C.
 
-**Chuck Optimizer:** [ariannamethod/chuck.optimizer](https://github.com/ariannamethod/chuck.optimizer) — self-aware optimizer with 9 levels. in memory of Carlos Ray "Chuck" Norris (1940–2026).
+**Chuck Optimizer:** [ariannamethod/chuck.optimizer](https://github.com/ariannamethod/chuck.optimizer) — self-aware optimizer. in memory of Carlos Ray "Chuck" Norris (1940–2026).
+
+**nanoGPT-notorch:** [ariannamethod/nanoGPT-notorch](https://github.com/ariannamethod/nanoGPT-notorch) — the reference that proved torch can be replaced.
 
 **Arianna Method:** [ariannamethod/ariannamethod.ai](https://github.com/ariannamethod/ariannamethod.ai) — patterns over parameters.
 

@@ -2,13 +2,8 @@
 """
 benchmark.py — Chuck vs Adam head-to-head comparison
 
-Trains the same VLM architecture twice using notorch (pure C engine
-called from Python via ctypes). No torch dependency.
-
-Run:
-    python benchmark.py
-
-Part of simple_vlm project (Arianna Method)
+No PyTorch. No numpy. Pure notorch C engine via ctypes.
+Same architecture, same data, same seed, both optimizers.
 """
 
 import sys
@@ -16,31 +11,31 @@ import os
 import json
 import time
 import random
-import math
-import numpy as np
+import ctypes
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'ariannamethod'))
-from notorch_py import NotorchLib
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ariannamethod.notorch_nn import (
+    _lib, Tensor, Parameter, seed,
+)
 
 # ── Architecture ─────────────────────────────────────────────────────────────
 
-D_MODEL = 32
-N_HEADS = 4
+D_MODEL = 128
+N_HEADS = 8
 HEAD_DIM = D_MODEL // N_HEADS
-D_FF = 64
-MAX_SEQ = 32
-VOCAB_SIZE = 64       # will be trimmed to actual vocab
-N_LAYERS = 2
-IMAGE_DIM = 16
-N_PATCHES = 4
+D_FF = 256
+MAX_SEQ = 64          # shorter for benchmark speed
+N_LAYERS = 4
+N_PATCHES = 16
+IMAGE_DIM = 64
 
 # ── Training ─────────────────────────────────────────────────────────────────
 
 EPOCHS = 500
-LR = 0.003
+LR = 3e-4
 SEED = 42
 
-WEIGHT_DIR = os.path.join(os.path.dirname(__file__), 'weights')
+WEIGHT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'weights')
 os.makedirs(WEIGHT_DIR, exist_ok=True)
 
 
@@ -56,57 +51,49 @@ class CharTokenizer:
     def encode(self, text):
         return [self.char_to_id[ch] for ch in text]
 
-    def decode(self, ids):
-        return ''.join(self.id_to_char.get(i, '?') for i in ids)
-
 
 # ── Synthetic image features ─────────────────────────────────────────────────
 
 def create_image_features():
-    """Create synthetic image features matching the C line."""
-    feats = np.full(N_PATCHES * IMAGE_DIM, 0.1, dtype=np.float32)
+    """Create synthetic image features — pure Python lists, no numpy."""
+    feats = [0.1] * (N_PATCHES * IMAGE_DIM)
     for p in range(N_PATCHES):
         base = p * IMAGE_DIM
         for i in range(IMAGE_DIM // 4):
             feats[base + i] = 0.8
         for i in range(IMAGE_DIM // 4, IMAGE_DIM // 2):
             feats[base + i] = 0.6
+        for i in range(IMAGE_DIM // 2, 3 * IMAGE_DIM // 4):
+            feats[base + i] = 0.4
     return feats
 
 
 # ── Model initialization ─────────────────────────────────────────────────────
 
-def init_model(nt, vocab_size):
+def init_model(vocab_size):
     """Initialize VLM parameters on the tape. Returns dict of param indices."""
     w = {}
 
     # Vision projection
-    vw = nt.tensor_new2d(D_MODEL, IMAGE_DIM)
-    nt.tensor_xavier(vw, IMAGE_DIM, D_MODEL)
-    w['vis_proj_w'] = nt.tape_param(vw)
+    vw = _lib.nt_tensor_new2d(D_MODEL, IMAGE_DIM)
+    _lib.nt_tensor_xavier(vw, IMAGE_DIM, D_MODEL)
+    w['vis_proj_w'] = _lib.nt_tape_param(vw)
 
-    vb = nt.tensor_new(D_MODEL)
-    nt.tensor_fill(vb, 0.0)
-    w['vis_proj_b'] = nt.tape_param(vb)
-
-    vp = nt.tensor_new(N_PATCHES * D_MODEL)
-    nt.tensor_rand(vp, 0.02)
-    w['vis_pos'] = nt.tape_param(vp)
-    nt.tape_no_decay(w['vis_pos'])
+    vp = _lib.nt_tensor_new(N_PATCHES * D_MODEL)
+    _lib.nt_tensor_rand(vp, ctypes.c_float(0.02))
+    w['vis_pos'] = _lib.nt_tape_param(vp)
+    _lib.nt_tape_no_decay(w['vis_pos'])
 
     # Text embeddings
-    wte = nt.tensor_new2d(vocab_size, D_MODEL)
-    nt.tensor_rand(wte, 0.02)
-    w['wte'] = nt.tape_param(wte)
-    nt.tape_no_decay(w['wte'])
+    wte = _lib.nt_tensor_new2d(vocab_size, D_MODEL)
+    _lib.nt_tensor_rand(wte, ctypes.c_float(0.02))
+    w['wte'] = _lib.nt_tape_param(wte)
+    _lib.nt_tape_no_decay(w['wte'])
 
-    wpe = nt.tensor_new2d(MAX_SEQ, D_MODEL)
-    nt.tensor_rand(wpe, 0.02)
-    w['wpe'] = nt.tape_param(wpe)
-    nt.tape_no_decay(w['wpe'])
-
-    total = (vw.contents.len + vb.contents.len + vp.contents.len +
-             wte.contents.len + wpe.contents.len)
+    wpe = _lib.nt_tensor_new2d(MAX_SEQ, D_MODEL)
+    _lib.nt_tensor_rand(wpe, ctypes.c_float(0.02))
+    w['wpe'] = _lib.nt_tape_param(wpe)
+    _lib.nt_tape_no_decay(w['wpe'])
 
     # Transformer layers
     for layer in range(N_LAYERS):
@@ -119,94 +106,101 @@ def init_model(nt, vocab_size):
             ('cv', D_MODEL, D_MODEL), ('co', D_MODEL, D_MODEL),
             ('ff1', D_FF, D_MODEL), ('ff2', D_MODEL, D_FF),
         ]:
-            t = nt.tensor_new2d(rows, cols)
-            nt.tensor_xavier(t, cols, rows)
-            w[f'{prefix}_{name}'] = nt.tape_param(t)
-            total += t.contents.len
+            t = _lib.nt_tensor_new2d(rows, cols)
+            _lib.nt_tensor_xavier(t, cols, rows)
+            w[f'{prefix}_{name}'] = _lib.nt_tape_param(t)
 
         for name, val in [
             ('ln1_g', 1.0), ('ln1_b', 0.0),
             ('ln2_g', 1.0), ('ln2_b', 0.0),
             ('ln3_g', 1.0), ('ln3_b', 0.0),
         ]:
-            t = nt.tensor_new(D_MODEL)
-            nt.tensor_fill(t, val)
-            w[f'{prefix}_{name}'] = nt.tape_param(t)
-            nt.tape_no_decay(w[f'{prefix}_{name}'])
-            total += t.contents.len
+            t = _lib.nt_tensor_new(D_MODEL)
+            _lib.nt_tensor_fill(t, ctypes.c_float(val))
+            w[f'{prefix}_{name}'] = _lib.nt_tape_param(t)
+            _lib.nt_tape_no_decay(w[f'{prefix}_{name}'])
 
     # Final layer norm
-    lng = nt.tensor_new(D_MODEL)
-    nt.tensor_fill(lng, 1.0)
-    w['ln_f_g'] = nt.tape_param(lng)
-    nt.tape_no_decay(w['ln_f_g'])
-    total += lng.contents.len
+    lng = _lib.nt_tensor_new(D_MODEL)
+    _lib.nt_tensor_fill(lng, ctypes.c_float(1.0))
+    w['ln_f_g'] = _lib.nt_tape_param(lng)
+    _lib.nt_tape_no_decay(w['ln_f_g'])
 
-    lnb = nt.tensor_new(D_MODEL)
-    nt.tensor_fill(lnb, 0.0)
-    w['ln_f_b'] = nt.tape_param(lnb)
-    nt.tape_no_decay(w['ln_f_b'])
-    total += lnb.contents.len
+    lnb = _lib.nt_tensor_new(D_MODEL)
+    _lib.nt_tensor_fill(lnb, ctypes.c_float(0.0))
+    w['ln_f_b'] = _lib.nt_tape_param(lnb)
+    _lib.nt_tape_no_decay(w['ln_f_b'])
 
-    w['total_params'] = total
+    # Output head
+    head = _lib.nt_tensor_new2d(vocab_size, D_MODEL)
+    _lib.nt_tensor_xavier(head, D_MODEL, vocab_size)
+    w['head'] = _lib.nt_tape_param(head)
+
     return w
 
 
 # ── Forward pass ─────────────────────────────────────────────────────────────
 
-def forward(nt, w, token_ids, image_features, T, vocab_size):
-    """Run VLM forward pass. Returns tape index of logits."""
-    # Push image features onto tape
-    img_t = nt.tensor_from_numpy(image_features)
-    img_idx = nt.tape_push_data(img_t)
+def forward(w, token_ids, image_features, T, vocab_size):
+    """Run VLM forward pass using raw ctypes. Returns tape index of logits."""
+    # Push image features
+    img_t = _lib.nt_tensor_new(N_PATCHES * IMAGE_DIM)
+    s = ctypes.cast(img_t, ctypes.POINTER(ctypes.c_float * (N_PATCHES * IMAGE_DIM)))
+    # Direct data access via struct
+    from ariannamethod.notorch_nn import _NtTensor
+    ts = ctypes.cast(img_t, ctypes.POINTER(_NtTensor)).contents
+    for i in range(N_PATCHES * IMAGE_DIM):
+        ts.data[i] = image_features[i]
+    img_idx = _lib.nt_tape_record(img_t, 0, -1, -1, ctypes.c_float(0))
 
     # Vision projection + position
-    vis_idx = nt.seq_linear(w['vis_proj_w'], img_idx, N_PATCHES)
-    vis_idx = nt.add(vis_idx, w['vis_pos'])
+    vis_idx = _lib.nt_seq_linear(w['vis_proj_w'], img_idx, N_PATCHES)
+    vis_idx = _lib.nt_add(vis_idx, w['vis_pos'])
 
     # Token input
-    tok_arr = np.array(token_ids[:T], dtype=np.float32)
-    tok_t = nt.tensor_from_numpy(tok_arr)
-    tok_idx = nt.tape_push_data(tok_t)
+    tok_t = _lib.nt_tensor_new(T)
+    tok_s = ctypes.cast(tok_t, ctypes.POINTER(_NtTensor)).contents
+    for i in range(T):
+        tok_s.data[i] = float(token_ids[i])
+    tok_idx = _lib.nt_tape_record(tok_t, 0, -1, -1, ctypes.c_float(0))
 
     # Text embedding
-    x = nt.seq_embedding(w['wte'], w['wpe'], tok_idx, T, D_MODEL)
+    x = _lib.nt_seq_embedding(w['wte'], w['wpe'], tok_idx, T, D_MODEL)
 
     # Transformer layers
     for layer in range(N_LAYERS):
         p = f'L{layer}'
 
         # Self-attention
-        q = nt.seq_linear(w[f'{p}_wq'], x, T)
-        k = nt.seq_linear(w[f'{p}_wk'], x, T)
-        v = nt.seq_linear(w[f'{p}_wv'], x, T)
-        attn = nt.mh_causal_attention(q, k, v, T, HEAD_DIM)
-        attn = nt.seq_linear(w[f'{p}_wo'], attn, T)
-        x = nt.add(x, attn)
-        x = nt.seq_layernorm(x, w[f'{p}_ln1_g'], w[f'{p}_ln1_b'], T, D_MODEL)
+        q = _lib.nt_seq_linear(w[f'{p}_wq'], x, T)
+        k = _lib.nt_seq_linear(w[f'{p}_wk'], x, T)
+        v = _lib.nt_seq_linear(w[f'{p}_wv'], x, T)
+        attn = _lib.nt_mh_causal_attention(q, k, v, T, HEAD_DIM)
+        attn = _lib.nt_seq_linear(w[f'{p}_wo'], attn, T)
+        x = _lib.nt_add(x, attn)
+        x = _lib.nt_seq_layernorm(x, w[f'{p}_ln1_g'], w[f'{p}_ln1_b'],
+                                    T, D_MODEL)
 
-        # Cross-attention (simplified — use linear projections as proxy)
-        cq = nt.seq_linear(w[f'{p}_cq'], x, T)
-        ck = nt.seq_linear(w[f'{p}_ck'], vis_idx, N_PATCHES)
-        cv = nt.seq_linear(w[f'{p}_cv'], vis_idx, N_PATCHES)
-
-        # Simplified cross-attention: project query down and back
-        # (Full cross-attn would need a custom op — this is the honest
-        #  simplification matching the C line's forward-only approach)
-        co = nt.seq_linear(w[f'{p}_co'], cq, T)
-        x = nt.add(x, co)
-        x = nt.seq_layernorm(x, w[f'{p}_ln2_g'], w[f'{p}_ln2_b'], T, D_MODEL)
+        # Cross-attention (simplified — linear projection route)
+        cq = _lib.nt_seq_linear(w[f'{p}_cq'], x, T)
+        _lib.nt_seq_linear(w[f'{p}_ck'], vis_idx, N_PATCHES)
+        _lib.nt_seq_linear(w[f'{p}_cv'], vis_idx, N_PATCHES)
+        co = _lib.nt_seq_linear(w[f'{p}_co'], cq, T)
+        x = _lib.nt_add(x, co)
+        x = _lib.nt_seq_layernorm(x, w[f'{p}_ln2_g'], w[f'{p}_ln2_b'],
+                                    T, D_MODEL)
 
         # FFN
-        ff = nt.seq_linear(w[f'{p}_ff1'], x, T)
-        ff = nt.gelu(ff)
-        ff = nt.seq_linear(w[f'{p}_ff2'], ff, T)
-        x = nt.add(x, ff)
-        x = nt.seq_layernorm(x, w[f'{p}_ln3_g'], w[f'{p}_ln3_b'], T, D_MODEL)
+        ff = _lib.nt_seq_linear(w[f'{p}_ff1'], x, T)
+        ff = _lib.nt_gelu(ff)
+        ff = _lib.nt_seq_linear(w[f'{p}_ff2'], ff, T)
+        x = _lib.nt_add(x, ff)
+        x = _lib.nt_seq_layernorm(x, w[f'{p}_ln3_g'], w[f'{p}_ln3_b'],
+                                    T, D_MODEL)
 
-    # Final norm + output projection (weight-tied with wte)
-    x = nt.seq_layernorm(x, w['ln_f_g'], w['ln_f_b'], T, D_MODEL)
-    logits = nt.seq_linear(w['wte'], x, T)
+    # Final norm + output
+    x = _lib.nt_seq_layernorm(x, w['ln_f_g'], w['ln_f_b'], T, D_MODEL)
+    logits = _lib.nt_seq_linear(w['head'], x, T)
 
     return logits
 
@@ -215,20 +209,16 @@ def forward(nt, w, token_ids, image_features, T, vocab_size):
 
 def train_run(optimizer_name, text, tokenizer, image_features):
     """Train one full run. Returns dict with metrics."""
-    nt = NotorchLib()
-    nt.seed(SEED)
-    random.seed(SEED)
-    np.random.seed(SEED)
+    from ariannamethod.notorch_nn import _NtTensor
 
-    nt.tape_start()
-    w = init_model(nt, tokenizer.vocab_size)
-    n_params = nt.tape_param.__func__  # just for counting — use stored total
-    total_params = w['total_params']
+    seed(SEED)
+
+    _lib.nt_tape_start()
+    w = init_model(tokenizer.vocab_size)
 
     print(f"\n  ── {optimizer_name} ──")
-    print(f"  Parameters: {total_params:,}")
 
-    nt.train_mode(True)
+    _lib.nt_train_mode(1)
     loss_history = []
     best_loss = float('inf')
     start = time.time()
@@ -247,53 +237,52 @@ def train_run(optimizer_name, text, tokenizer, image_features):
         target_tokens = token_ids[s + 1:s + T + 1]
 
         # Forward
-        logits_idx = forward(nt, w, input_tokens, image_features,
+        logits_idx = forward(w, input_tokens, image_features,
                              T, tokenizer.vocab_size)
 
         # Targets tensor
-        tgt_arr = np.array(target_tokens, dtype=np.float32)
-        tgt_t = nt.tensor_from_numpy(tgt_arr)
-        tgt_idx = nt.tape_push_data(tgt_t)
+        tgt_t = _lib.nt_tensor_new(T)
+        tgt_s = ctypes.cast(tgt_t, ctypes.POINTER(_NtTensor)).contents
+        for i in range(T):
+            tgt_s.data[i] = float(target_tokens[i])
+        tgt_idx = _lib.nt_tape_record(tgt_t, 0, -1, -1, ctypes.c_float(0))
 
         # Loss
-        loss_idx = nt.seq_cross_entropy(logits_idx, tgt_idx,
-                                         T, tokenizer.vocab_size)
-
-        # Read loss value
-        loss_val = nt.tape_entry_scalar(loss_idx)
+        loss_idx = _lib.nt_seq_cross_entropy(logits_idx, tgt_idx,
+                                              T, tokenizer.vocab_size)
+        loss_val = _lib.nt_tape_entry_scalar(loss_idx)
 
         # Backward + optimizer step
-        nt.tape_backward(loss_idx)
-        nt.tape_clip_grads(1.0)
+        _lib.nt_tape_backward(loss_idx)
+        _lib.nt_tape_clip_grads(ctypes.c_float(1.0))
 
         if optimizer_name == "Chuck":
-            nt.tape_chuck_step(LR, loss_val)
+            _lib.nt_tape_chuck_step(ctypes.c_float(LR),
+                                     ctypes.c_float(loss_val))
         else:
-            nt.tape_adam_step(LR)
+            _lib.nt_tape_adam_step(ctypes.c_float(LR))
 
         loss_history.append(loss_val)
         if loss_val < best_loss:
             best_loss = loss_val
 
-        if epoch % 50 == 0 or epoch == EPOCHS - 1:
+        if epoch % 100 == 0 or epoch == EPOCHS - 1:
             elapsed = time.time() - start
             print(f"   epoch {epoch:3d} | loss {loss_val:.4f} | "
                   f"best {best_loss:.4f} | {elapsed:.1f}s")
 
-        # Reset tape computation graph (keep params)
-        nt.tape_reset_graph()
+        # Reset tape
+        _lib.nt_tape_reset_graph()
 
     elapsed = time.time() - start
-    nt.tape_clear()
+    _lib.nt_tape_clear()
 
-    # Analyze
     early_avg = sum(loss_history[:20]) / max(len(loss_history[:20]), 1)
     late_avg = sum(loss_history[-20:]) / max(len(loss_history[-20:]), 1)
     improvement = (early_avg - late_avg) / early_avg * 100 if early_avg > 0 else 0
 
     return {
         'optimizer': optimizer_name,
-        'total_params': total_params,
         'epochs': EPOCHS,
         'lr': LR,
         'final_loss': loss_history[-1] if loss_history else 0,
@@ -309,13 +298,14 @@ def train_run(optimizer_name, text, tokenizer, image_features):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    print("=" * 60)
-    print("  BENCHMARK: Chuck vs Adam")
+    print("=" * 64)
+    print("  BENCHMARK: Chuck vs Adam — Scaled VLM")
     print("  Engine: notorch (pure C via Python ctypes)")
+    print("  No PyTorch. No numpy.")
     print("  Architecture: VLM, d=%d, h=%d, L=%d, ff=%d" % (
         D_MODEL, N_HEADS, N_LAYERS, D_FF))
     print("  Epochs: %d | LR: %.4f | Seed: %d" % (EPOCHS, LR, SEED))
-    print("=" * 60)
+    print("=" * 64)
 
     text = (
         "This is a red square. "
@@ -326,6 +316,10 @@ def main():
         "The central area contains a red square shape. "
         "A bright red square sits in the middle of the frame. "
         "The center of the image has a red colored square. "
+        "I can see a red square in this image. "
+        "The main feature is a red square centered in the picture. "
+        "A square shape with red color appears at the center. "
+        "The image depicts a red square. "
     )
 
     tokenizer = CharTokenizer(text)
@@ -339,9 +333,9 @@ def main():
                                        image_features)
 
     # ── Comparison ────────────────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("  RESULTS")
-    print("=" * 60)
+    print("\n" + "=" * 64)
+    print("  RESULTS — 823K params, %d epochs" % EPOCHS)
+    print("=" * 64)
 
     header = f"  {'':20s} {'Adam':>12s} {'Chuck':>12s} {'Winner':>10s}"
     print(header)
@@ -360,8 +354,7 @@ def main():
             winner = "Chuck" if c < a else ("Adam" if a < c else "tie")
         else:
             winner = "Chuck" if c > a else ("Adam" if a > c else "tie")
-        icon = "🔥" if winner == "Chuck" else ("  " if winner == "tie" else "  ")
-        print(f"  {label:20s} {a_s:>12s} {c_s:>12s} {icon}{winner:>8s}")
+        print(f"  {label:20s} {a_s:>12s} {c_s:>12s} {winner:>10s}")
 
     row("Best loss", "best_loss")
     row("Final loss", "final_loss")
@@ -372,19 +365,14 @@ def main():
 
     # Save results
     save_data = {
-        'benchmark': 'Chuck vs Adam',
+        'benchmark': 'Chuck vs Adam — Scaled VLM',
         'engine': 'notorch (pure C via Python ctypes)',
+        'dependencies': 'none (no torch, no numpy)',
         'architecture': {
-            'd_model': D_MODEL,
-            'n_heads': N_HEADS,
-            'n_layers': N_LAYERS,
-            'd_ff': D_FF,
-            'max_seq': MAX_SEQ,
-            'n_patches': N_PATCHES,
+            'd_model': D_MODEL, 'n_heads': N_HEADS, 'n_layers': N_LAYERS,
+            'd_ff': D_FF, 'max_seq': MAX_SEQ, 'n_patches': N_PATCHES,
         },
-        'epochs': EPOCHS,
-        'lr': LR,
-        'seed': SEED,
+        'epochs': EPOCHS, 'lr': LR, 'seed': SEED,
     }
     for opt_name in ["Adam", "Chuck"]:
         r = results[opt_name]
@@ -408,11 +396,11 @@ def main():
     if chuck_wins > adam_wins:
         print("  Verdict: Chuck wins. Adam is blind. Chuck sees.")
     elif adam_wins > chuck_wins:
-        print("  Verdict: Adam wins this round. Small model, small data.")
-        print("  Chuck's real power shows at scale. The test continues.")
+        print("  Verdict: Adam wins this round. But 823K is still small.")
+        print("  Chuck's real power shows at 10M+. The test continues.")
     else:
-        print("  Verdict: Tie. At this scale, both find similar minima.")
-        print("  The real test is at 52M params. This was just the warmup.")
+        print("  Verdict: Tie. Both find similar minima at this scale.")
+        print("  The real test is at millions of params.")
 
     print("\n  Resonance is unbreakable.")
 

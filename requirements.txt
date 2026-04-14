@@ -1,4 +1,2 @@
-torch>=2.0.0
-numpy>=1.21.0
-pillow>=9.0.0
-
+# no dependencies — notorch is the engine
+# Python standard library only (ctypes, os, math, random, json, time)
