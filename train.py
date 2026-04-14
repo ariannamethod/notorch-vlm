@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-train.py — Train a VLM on notorch + Chuck
+train.py — Train a scaled Vision Language Model on notorch + Chuck
 
-No PyTorch. No numpy. Pure C engine via ctypes.
-Following the nanoGPT-notorch pattern exactly.
-
-Architecture: Vision encoder + transformer with cross-attention
-Optimizer: Chuck (self-aware, loss-adaptive, gradient-monitoring)
-Engine: notorch (pure C, libnotorch.so via ctypes)
+Engine: notorch — pure C neural network engine (libnotorch.so via ctypes)
+        No PyTorch. No numpy. All computation happens in C.
+        Python is the orchestration layer; C does the math.
+Optimizer: Chuck — self-aware, loss-adaptive optimizer (nt_tape_chuck_step)
+Architecture: Vision encoder + transformer with cross-attention, 823K params
 """
 
 import os
