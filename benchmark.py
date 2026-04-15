@@ -20,10 +20,10 @@ from ariannamethod.notorch_nn import (
 
 # ── Architecture ─────────────────────────────────────────────────────────────
 
-D_MODEL = 128
+D_MODEL = 160
 N_HEADS = 8
 HEAD_DIM = D_MODEL // N_HEADS
-D_FF = 256
+D_FF = 496
 MAX_SEQ = 64          # shorter for benchmark speed
 N_LAYERS = 4
 N_PATCHES = 16
@@ -31,7 +31,7 @@ IMAGE_DIM = 64
 
 # ── Training ─────────────────────────────────────────────────────────────────
 
-EPOCHS = 500
+EPOCHS = 1000
 LR = 3e-4
 SEED = 42
 
@@ -320,6 +320,24 @@ def main():
         "The main feature is a red square centered in the picture. "
         "A square shape with red color appears at the center. "
         "The image depicts a red square. "
+        "Looking at this image I see a red square. "
+        "The image contains a geometric shape which is a red square. "
+        "A solid red square is positioned in the center of the frame. "
+        "The dominant element is a red square against a dark background. "
+        "In this picture there is a red square shape centered horizontally. "
+        "The visual shows a red rectangle that is actually a perfect square. "
+        "A red square occupies the central region of the image. "
+        "The image features a single red square on a plain background. "
+        "What I see is a square colored in red placed at the center. "
+        "The photograph shows a red geometric shape in the middle. "
+        "A vivid red square can be observed at the heart of the image. "
+        "The primary subject is a red square located centrally. "
+        "One red square is visible in the center of this image. "
+        "The scene contains a square object that is colored red. "
+        "At the center of the image sits a red colored square shape. "
+        "The image displays a simple red square as its main element. "
+        "A red square form is the only object in this picture. "
+        "The central focus of this image is a red square figure. "
     )
 
     tokenizer = CharTokenizer(text)
@@ -334,7 +352,7 @@ def main():
 
     # ── Comparison ────────────────────────────────────────────────────────────
     print("\n" + "=" * 64)
-    print("  RESULTS — 823K params, %d epochs" % EPOCHS)
+    print("  RESULTS — 1.5M params, %d epochs" % EPOCHS)
     print("=" * 64)
 
     header = f"  {'':20s} {'Adam':>12s} {'Chuck':>12s} {'Winner':>10s}"

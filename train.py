@@ -6,7 +6,7 @@ Engine: notorch — pure C neural network engine (libnotorch.so via ctypes)
         No PyTorch. No numpy. All computation happens in C.
         Python is the orchestration layer; C does the math.
 Optimizer: Chuck — self-aware, loss-adaptive optimizer (nt_tape_chuck_step)
-Architecture: Vision encoder + transformer with cross-attention, 823K params
+Architecture: Vision encoder + transformer with cross-attention, 1.5M params
 """
 
 import os
@@ -28,11 +28,11 @@ from ariannamethod.chuck import ChuckOptimizer
 # ARCHITECTURE — scaled VLM
 # ═══════════════════════════════════════════════════════════════════════════════
 
-D_MODEL = 128        # hidden dimension
+D_MODEL = 160        # hidden dimension (scaled from 128)
 N_HEADS = 8          # attention heads
-HEAD_DIM = D_MODEL // N_HEADS  # 16
+HEAD_DIM = D_MODEL // N_HEADS  # 20
 N_LAYERS = 4         # transformer layers
-D_FF = 256           # feed-forward intermediate
+D_FF = 496           # feed-forward intermediate (scaled from 256)
 MAX_SEQ = 128        # max sequence length
 N_PATCHES = 16       # image patches
 IMAGE_DIM = 64       # feature dimension per patch
@@ -41,7 +41,7 @@ IMAGE_DIM = 64       # feature dimension per patch
 # TRAINING CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
 
-EPOCHS = 1000
+EPOCHS = 2000
 LR = 3e-4
 SEED = 42
 GRAD_CLIP = 1.0
@@ -450,7 +450,8 @@ def main():
 
     seed(SEED)
 
-    # Training text
+    # Training text — diverse image descriptions for VLM training
+    # synthetic data: descriptions of a red square on various backgrounds
     text = (
         "This is a red square. "
         "The image shows a red object in the center. "
@@ -464,6 +465,24 @@ def main():
         "The main feature is a red square centered in the picture. "
         "A square shape with red color appears at the center. "
         "The image depicts a red square. "
+        "Looking at this image I see a red square. "
+        "The image contains a geometric shape which is a red square. "
+        "A solid red square is positioned in the center of the frame. "
+        "The dominant element is a red square against a dark background. "
+        "In this picture there is a red square shape centered horizontally. "
+        "The visual shows a red rectangle that is actually a perfect square. "
+        "A red square occupies the central region of the image. "
+        "The image features a single red square on a plain background. "
+        "What I see is a square colored in red placed at the center. "
+        "The photograph shows a red geometric shape in the middle. "
+        "A vivid red square can be observed at the heart of the image. "
+        "The primary subject is a red square located centrally. "
+        "One red square is visible in the center of this image. "
+        "The scene contains a square object that is colored red. "
+        "At the center of the image sits a red colored square shape. "
+        "The image displays a simple red square as its main element. "
+        "A red square form is the only object in this picture. "
+        "The central focus of this image is a red square figure. "
     )
 
     tokenizer = CharTokenizer(text)
