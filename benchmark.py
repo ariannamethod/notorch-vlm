@@ -414,8 +414,8 @@ def main():
     if chuck_wins > adam_wins:
         print("  Verdict: Chuck wins. Adam is blind. Chuck sees.")
     elif adam_wins > chuck_wins:
-        print("  Verdict: Adam wins this round. But 823K is still small.")
-        print("  Chuck's real power shows at 10M+. The test continues.")
+        print("  Verdict: Adam wins this round. But the test continues.")
+        print("  Chuck's real power shows at 10M+.")
     else:
         print("  Verdict: Tie. Both find similar minima at this scale.")
         print("  The real test is at millions of params.")

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-train.py — Train a ~20K parameter VLM prototype
-Python line: torch tensors + Chuck optimizer
-Saves weights to weights/ directory.
+train_torch.py — Legacy torch-based VLM training (archived)
 
-This is the first prototype training run for the project.
+Original ~21K parameter prototype using PyTorch + Chuck optimizer.
+Kept for reference. The active training script is train.py (notorch).
 """
 
 import torch
