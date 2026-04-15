@@ -181,11 +181,13 @@ def forward(w, token_ids, image_features, T, vocab_size):
         x = _lib.nt_seq_layernorm(x, w[f'{p}_ln1_g'], w[f'{p}_ln1_b'],
                                     T, D_MODEL)
 
-        # Cross-attention (simplified — linear projection route)
+        # Cross-attention (full multi-head, Q from text, K/V from image)
         cq = _lib.nt_seq_linear(w[f'{p}_cq'], x, T)
-        _lib.nt_seq_linear(w[f'{p}_ck'], vis_idx, N_PATCHES)
-        _lib.nt_seq_linear(w[f'{p}_cv'], vis_idx, N_PATCHES)
-        co = _lib.nt_seq_linear(w[f'{p}_co'], cq, T)
+        ck = _lib.nt_seq_linear(w[f'{p}_ck'], vis_idx, N_PATCHES)
+        cv = _lib.nt_seq_linear(w[f'{p}_cv'], vis_idx, N_PATCHES)
+        cross_out = _lib.nt_mh_cross_attention(cq, ck, cv, T, N_PATCHES,
+                                                HEAD_DIM)
+        co = _lib.nt_seq_linear(w[f'{p}_co'], cross_out, T)
         x = _lib.nt_add(x, co)
         x = _lib.nt_seq_layernorm(x, w[f'{p}_ln2_g'], w[f'{p}_ln2_b'],
                                     T, D_MODEL)

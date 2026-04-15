@@ -66,6 +66,26 @@ llama: examples/infer_llama.c gguf.c gguf.h notorch.c notorch.h
 
 # ── Training ──
 
+# ── Training ──
+
+train_vlm: train_vlm.c notorch.c notorch.h
+	$(CC) $(CFLAGS) $(BLAS_FLAGS) -o train_vlm train_vlm.c notorch.c -lm
+	@echo "Compiled: train_vlm (VLM training, $(BLAS_NAME))"
+
+# ── Inference Server ──
+
+serve: serve.c notorch.c notorch.h
+	$(CC) $(CFLAGS) $(BLAS_FLAGS) -o serve serve.c notorch.c -lm -lpthread
+	@echo "Compiled: serve (HTTP streaming inference server)"
+	@echo "  Run: ./serve [port] [weights_path]"
+	@echo "  Default: http://localhost:8080"
+
+# ── Shared Library ──
+
+libnotorch.so: notorch.c notorch.h
+	$(CC) $(CFLAGS) -fPIC -shared -o libnotorch.so notorch.c -lm
+	@echo "Built: libnotorch.so (for Python ctypes)"
+
 train_q: examples/train_q.c notorch.c notorch.h
 	$(CC) $(CFLAGS) $(BLAS_FLAGS) -o train_q examples/train_q.c notorch.c -lm
 	@echo "Compiled: train_q (PostGPT-Q 1.65M, $(BLAS_NAME))"
@@ -86,7 +106,8 @@ test: notorch_test
 
 clean:
 	rm -f notorch_test notorch_test_gpu notorch.o libnotorch.a notorch_cuda.o \
-		infer_janus_nt infer_gemma infer_llama train_q train_yent chat_yent test_gguf
+		infer_janus_nt infer_gemma infer_llama train_q train_yent chat_yent test_gguf \
+		train_vlm serve libnotorch.so
 
 help:
 	@echo "notorch — neural networks in pure C"
@@ -95,6 +116,9 @@ help:
 	@echo "  make cpu        Build tests without BLAS (portable)"
 	@echo "  make gpu        Build tests with CUDA"
 	@echo "  make lib        Build static library (libnotorch.a)"
+	@echo "  make libnotorch.so  Build shared library (for Python ctypes)"
+	@echo "  make train_vlm  Build VLM training (pure C)"
+	@echo "  make serve      Build HTTP streaming inference server"
 	@echo "  make infer      Build Janus RRPRAM inference"
 	@echo "  make gemma      Build Gemma-3 GGUF inference"
 	@echo "  make llama      Build LLaMA/Qwen/SmolLM2 inference"
