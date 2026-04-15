@@ -1,2 +1,6 @@
-# no dependencies — notorch is the engine
+# no pip dependencies — notorch is the engine
 # Python standard library only (ctypes, os, math, random, json, time)
+#
+# Build dependency: C compiler (cc/gcc/clang)
+#   cd ariannamethod && cc -std=c11 -O2 -fPIC -shared -o libnotorch.so notorch.c -lm
+# This creates libnotorch.so which Python loads via ctypes. No pip install needed.
