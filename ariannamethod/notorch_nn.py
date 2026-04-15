@@ -86,6 +86,9 @@ _lib.nt_seq_layernorm.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int,
 _lib.nt_mh_causal_attention.restype = ctypes.c_int
 _lib.nt_mh_causal_attention.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int,
                                          ctypes.c_int, ctypes.c_int]
+_lib.nt_mh_cross_attention.restype = ctypes.c_int
+_lib.nt_mh_cross_attention.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_int, ctypes.c_int, ctypes.c_int]
 _lib.nt_seq_cross_entropy.restype = ctypes.c_int
 _lib.nt_seq_cross_entropy.argtypes = [ctypes.c_int, ctypes.c_int,
                                        ctypes.c_int, ctypes.c_int]

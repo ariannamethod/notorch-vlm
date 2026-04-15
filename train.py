@@ -76,12 +76,11 @@ class VLM(Module):
     Architecture:
       - Vision projection: [IMAGE_DIM] → [D_MODEL] per patch
       - Text embedding: token + position
-      - N transformer blocks: self-attn → cross-attn → FFN
+      - N transformer blocks: self-attn → cross-attn (full MH) → FFN
       - Weight-tied output head
 
-    Cross-attention is simplified to linear projections through the tape
-    (full bidirectional attention would need a custom C op — this is the
-    honest simplification that still trains end-to-end with gradients).
+    Cross-attention uses nt_mh_cross_attention — full multi-head attention
+    with Q from text, K/V from image patches. No causal mask. Full backward.
     """
 
     def __init__(self, vocab_size, d_model=D_MODEL, n_heads=N_HEADS,
@@ -265,13 +264,13 @@ def forward_train(model, token_ids, target_ids, image_features, T):
         h = _lib.nt_add(h, attn)
         h = _lib.nt_seq_layernorm(h, ln1_g, ln1_b, T, D)
 
-        # Cross-attention (text attends to image)
-        # Q from text, K/V from image patches
+        # Cross-attention (text attends to image) — full multi-head
+        # Q from text, K/V from image patches, no causal mask
         cq = _lib.nt_seq_linear(cq_i, h, T)
         ck = _lib.nt_seq_linear(ck_i, vis, NP)
         cv = _lib.nt_seq_linear(cv_i, vis, NP)
-        # Route through output projection
-        co = _lib.nt_seq_linear(co_i, cq, T)
+        cross_out = _lib.nt_mh_cross_attention(cq, ck, cv, T, NP, HD)
+        co = _lib.nt_seq_linear(co_i, cross_out, T)
         h = _lib.nt_add(h, co)
         h = _lib.nt_seq_layernorm(h, ln2_g, ln2_b, T, D)
 
@@ -371,7 +370,8 @@ def generate(model, token_ids, image_features, max_new=60, temperature=0.8,
             cq = _lib.nt_seq_linear(cq_i, h, T)
             ck = _lib.nt_seq_linear(ck_i, vis, NP)
             cv = _lib.nt_seq_linear(cv_i, vis, NP)
-            co = _lib.nt_seq_linear(co_i, cq, T)
+            cross_out = _lib.nt_mh_cross_attention(cq, ck, cv, T, NP, HD)
+            co = _lib.nt_seq_linear(co_i, cross_out, T)
             h = _lib.nt_add(h, co)
             h = _lib.nt_seq_layernorm(h, ln2_g, ln2_b, T, D)
 

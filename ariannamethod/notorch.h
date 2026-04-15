@@ -103,6 +103,7 @@ void nt_tensor_print(const nt_tensor* t, const char* name);
 #define NT_OP_SEQ_LAYERNORM  21   // layernorm per position
 #define NT_OP_GELU           22   // GELU activation
 #define NT_OP_GQA_ATTN       23   // grouped-query causal attention
+#define NT_OP_MH_CROSS_ATTN 24   // multi-head cross-attention (no causal mask)
 
 typedef struct {
     nt_tensor* output;          // forward result
@@ -320,6 +321,11 @@ int nt_mh_causal_attention(int q_idx, int k_idx, int v_idx, int T, int head_dim)
 // Grouped-Query Attention (GQA): Q has n_heads, K/V have n_kv_heads
 // Q: [T, n_heads * head_dim], K/V: [T, n_kv_heads * head_dim]
 int nt_gqa_causal_attention(int q_idx, int k_idx, int v_idx, int T, int head_dim, int n_heads, int n_kv_heads);
+
+// Multi-head cross-attention (no causal mask)
+// Q: [Tq, D], K: [Tkv, D], V: [Tkv, D]  — Q attends to all K/V positions
+// Used for vision-language cross-modal attention (text queries, image keys/values)
+int nt_mh_cross_attention(int q_idx, int k_idx, int v_idx, int Tq, int Tkv, int head_dim);
 
 // Cross-entropy loss (single position)
 int nt_cross_entropy(int logits_idx, int target);

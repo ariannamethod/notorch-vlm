@@ -893,6 +893,79 @@ void nt_tape_backward(int loss_idx) {
             break;
         }
 
+        case NT_OP_MH_CROSS_ATTN: {
+            // Backward for multi-head cross-attention (no causal mask)
+            // Q[Tq,D] attends to K[Tkv,D], V[Tkv,D]
+            if (e->parent1 >= 0 && e->parent2 >= 0 && e->parent3 >= 0) {
+                nt_tape_entry* pq = &g_tape.entries[e->parent1];
+                nt_tape_entry* pk = &g_tape.entries[e->parent2];
+                nt_tape_entry* pv = &g_tape.entries[e->parent3];
+                int Tq = (int)e->aux;
+                int head_dim = (int)e->aux2;
+                int Tkv = (int)e->aux3;
+                int D = e->output->len / Tq;
+                int n_heads = D / head_dim;
+                float sc = 1.0f / sqrtf((float)head_dim);
+                float* dq = (float*)calloc(Tq * D, sizeof(float));
+                float* dk = (float*)calloc(Tkv * D, sizeof(float));
+                float* dv = (float*)calloc(Tkv * D, sizeof(float));
+                if (dq && dk && dv) {
+                    for (int h = 0; h < n_heads; h++) {
+                        int ho = h * head_dim;
+                        for (int i = 0; i < Tq; i++) {
+                            float* qi = pq->output->data + i * D + ho;
+                            float* dout_i = dout + i * D + ho;
+                            // Recompute attention weights (all Tkv positions, no mask)
+                            float* scores = (float*)calloc(Tkv, sizeof(float));
+                            float* attn = (float*)calloc(Tkv, sizeof(float));
+                            if (!scores || !attn) { free(scores); free(attn); continue; }
+                            float mx = -1e30f;
+                            for (int j = 0; j < Tkv; j++) {
+                                float* kj = pk->output->data + j * D + ho;
+                                float dot = 0;
+                                for (int d = 0; d < head_dim; d++) dot += qi[d] * kj[d];
+                                scores[j] = dot * sc;
+                                if (scores[j] > mx) mx = scores[j];
+                            }
+                            float sm = 0;
+                            for (int j = 0; j < Tkv; j++) { attn[j] = expf(scores[j] - mx); sm += attn[j]; }
+                            if (sm > 0) for (int j = 0; j < Tkv; j++) attn[j] /= sm;
+                            // d_attn[j] = sum_d(dout_i[d] * V[j,d])
+                            float* d_attn = (float*)calloc(Tkv, sizeof(float));
+                            if (d_attn) {
+                                for (int j = 0; j < Tkv; j++) {
+                                    float* vj = pv->output->data + j * D + ho;
+                                    for (int d = 0; d < head_dim; d++) d_attn[j] += dout_i[d] * vj[d];
+                                }
+                                // dV[j] += attn[j] * dout_i
+                                for (int j = 0; j < Tkv; j++) {
+                                    float* dvj = dv + j * D + ho;
+                                    for (int d = 0; d < head_dim; d++) dvj[d] += attn[j] * dout_i[d];
+                                }
+                                // Softmax backward: ds = attn[j] * (d_attn[j] - dot(d_attn, attn))
+                                float dot_da = 0;
+                                for (int j = 0; j < Tkv; j++) dot_da += d_attn[j] * attn[j];
+                                for (int j = 0; j < Tkv; j++) {
+                                    float ds = attn[j] * (d_attn[j] - dot_da) * sc;
+                                    float* kj = pk->output->data + j * D + ho;
+                                    for (int d = 0; d < head_dim; d++) {
+                                        dq[i * D + ho + d] += ds * kj[d];
+                                        dk[j * D + ho + d] += ds * qi[d];
+                                    }
+                                }
+                            }
+                            free(scores); free(attn); free(d_attn);
+                        }
+                    }
+                    tape_acc_grad(e->parent1, dq, Tq * D);
+                    tape_acc_grad(e->parent2, dk, Tkv * D);
+                    tape_acc_grad(e->parent3, dv, Tkv * D);
+                }
+                free(dq); free(dk); free(dv);
+            }
+            break;
+        }
+
         case NT_OP_SEQ_CROSSENT: {
             if (e->parent1 >= 0) {
                 nt_tape_entry* pl = &g_tape.entries[e->parent1];
@@ -2037,6 +2110,56 @@ int nt_gqa_causal_attention(int q_idx, int k_idx, int v_idx, int T, int head_dim
 
     int idx = nt_tape_record4(out, NT_OP_GQA_ATTN, q_idx, k_idx, v_idx,
                               (float)T, (float)head_dim, (float)n_heads, (float)n_kv_heads);
+    nt_tensor_free(out);
+    return idx;
+}
+
+// Multi-head cross-attention: Q[Tq,D] attends to K[Tkv,D], V[Tkv,D]
+// No causal mask — every query position sees all key/value positions.
+// aux=Tq, aux2=head_dim, aux3=Tkv
+int nt_mh_cross_attention(int q_idx, int k_idx, int v_idx, int Tq, int Tkv, int head_dim) {
+    if (q_idx < 0 || k_idx < 0 || v_idx < 0) return -1;
+    nt_tape_entry* pq = &g_tape.entries[q_idx];
+    int D = pq->output->len / Tq;
+    int n_heads = D / head_dim;
+    if (n_heads <= 0 || D % head_dim != 0) return -1;
+    float scale = 1.0f / sqrtf((float)head_dim);
+
+    nt_tensor* out = nt_tensor_new(Tq * D);
+    if (!out) return -1;
+    nt_tape_entry* pk = &g_tape.entries[k_idx];
+    nt_tape_entry* pv = &g_tape.entries[v_idx];
+
+    float* scores_buf = (float*)malloc(Tkv * sizeof(float));
+    for (int h = 0; h < n_heads; h++) {
+        int ho = h * head_dim;
+        for (int i = 0; i < Tq; i++) {
+            float* qi = pq->output->data + i * D + ho;
+            float mx = -1e30f;
+            // Attend to ALL Tkv positions (no causal mask)
+            for (int j = 0; j < Tkv; j++) {
+                float* kj = pk->output->data + j * D + ho;
+                float dot = 0;
+                for (int d = 0; d < head_dim; d++) dot += qi[d] * kj[d];
+                scores_buf[j] = dot * scale;
+                if (scores_buf[j] > mx) mx = scores_buf[j];
+            }
+            float sum = 0;
+            for (int j = 0; j < Tkv; j++) { scores_buf[j] = expf(scores_buf[j] - mx); sum += scores_buf[j]; }
+            if (sum > 0) for (int j = 0; j < Tkv; j++) scores_buf[j] /= sum;
+            float* oi = out->data + i * D + ho;
+            for (int d = 0; d < head_dim; d++) oi[d] = 0;
+            for (int j = 0; j < Tkv; j++) {
+                float* vj = pv->output->data + j * D + ho;
+                for (int d = 0; d < head_dim; d++) oi[d] += scores_buf[j] * vj[d];
+            }
+        }
+    }
+    free(scores_buf);
+
+    // Record with aux=Tq, aux2=head_dim, aux3=Tkv
+    int idx = nt_tape_record4(out, NT_OP_MH_CROSS_ATTN, q_idx, k_idx, v_idx,
+                              (float)Tq, (float)head_dim, (float)Tkv, 0.0f);
     nt_tensor_free(out);
     return idx;
 }

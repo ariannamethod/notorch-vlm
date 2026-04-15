@@ -1,8 +1,8 @@
-// train_vlm.c — Minimal VLM training in pure C using notorch + Chuck
+// train_vlm.c — VLM training in pure C using notorch + Chuck
 // Part of simple_vlm project (Arianna Method)
 //
 // C line: notorch core + Chuck optimizer
-// ~20K parameters, character-level, synthetic image data
+// Full multi-head cross-attention, character-level, synthetic image data
 //
 // Build:
 //   cc -std=c11 -O2 -I. -o train_vlm train_vlm.c notorch.c -lm
@@ -267,67 +267,16 @@ static int forward_pass(VLMWeights* w, int* tokens, int T,
         x = nt_seq_layernorm(x, w->layers[l].ln1_g,
                               w->layers[l].ln1_b, T, D_MODEL);
 
-        // Cross-attention (text attends to image)
+        // Cross-attention (text attends to image) — full multi-head
+        // Q from text, K/V from image patches, no causal mask
         int cq = nt_seq_linear(w->layers[l].cq, x, T);
         int ck = nt_seq_linear(w->layers[l].ck, vis_idx, N_PATCHES);
         int cv = nt_seq_linear(w->layers[l].cv, vis_idx, N_PATCHES);
 
-        // Simple cross-attention: Q from text, K/V from image
-        // Use scaled dot-product (simplified — no causal mask for cross-attn)
-        {
-            nt_tensor* q_t = nt_tape_get()->entries[cq].output;
-            nt_tensor* k_t = nt_tape_get()->entries[ck].output;
-            nt_tensor* v_t = nt_tape_get()->entries[cv].output;
-
-            nt_tensor* out = nt_tensor_new(T * D_MODEL);
-            float scale = 1.0f / sqrtf((float)HEAD_DIM);
-
-            for (int h = 0; h < N_HEADS; h++) {
-                for (int t = 0; t < T; t++) {
-                    // Compute attention scores for this head
-                    float scores[N_PATCHES];
-                    float max_s = -1e30f;
-                    for (int p = 0; p < N_PATCHES; p++) {
-                        float dot = 0.0f;
-                        for (int d = 0; d < HEAD_DIM; d++) {
-                            int qi = t * D_MODEL + h * HEAD_DIM + d;
-                            int ki = p * D_MODEL + h * HEAD_DIM + d;
-                            dot += q_t->data[qi] * k_t->data[ki];
-                        }
-                        scores[p] = dot * scale;
-                        if (scores[p] > max_s) max_s = scores[p];
-                    }
-
-                    // Softmax
-                    float sum_exp = 0.0f;
-                    for (int p = 0; p < N_PATCHES; p++) {
-                        scores[p] = expf(scores[p] - max_s);
-                        sum_exp += scores[p];
-                    }
-                    for (int p = 0; p < N_PATCHES; p++)
-                        scores[p] /= (sum_exp + 1e-8f);
-
-                    // Weighted sum of values
-                    for (int d = 0; d < HEAD_DIM; d++) {
-                        float val = 0.0f;
-                        for (int p = 0; p < N_PATCHES; p++) {
-                            val += scores[p] *
-                                v_t->data[p * D_MODEL + h * HEAD_DIM + d];
-                        }
-                        out->data[t * D_MODEL + h * HEAD_DIM + d] = val;
-                    }
-                }
-            }
-
-            int cross_out_idx = nt_tape_get()->count;
-            nt_tape_get()->entries[cross_out_idx].output = out;
-            nt_tape_get()->entries[cross_out_idx].op = NT_OP_NONE;
-            nt_tape_get()->count++;
-
-            int co_proj = nt_seq_linear(w->layers[l].co,
-                                         cross_out_idx, T);
-            x = nt_add(x, co_proj);
-        }
+        // Full multi-head cross-attention with backward on tape
+        int cross_out = nt_mh_cross_attention(cq, ck, cv, T, N_PATCHES, HEAD_DIM);
+        int co_proj = nt_seq_linear(w->layers[l].co, cross_out, T);
+        x = nt_add(x, co_proj);
         x = nt_seq_layernorm(x, w->layers[l].ln2_g,
                               w->layers[l].ln2_b, T, D_MODEL);
 
